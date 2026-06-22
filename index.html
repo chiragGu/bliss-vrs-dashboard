@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Bliss VRS — Employee Directory</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <header>
+    <div class="header-inner">
+      <div class="logo-block">
+        <span class="logo-text">BLISS VRS</span>
+        <span class="logo-sub">Vivekananda Enterprises</span>
+      </div>
+      <nav class="tab-nav">
+        <button class="tab-btn active" data-tab="directory">Directory</button>
+        <button class="tab-btn" data-tab="orgchart">Org Chart</button>
+        <button class="tab-btn" data-tab="search">Search</button>
+      </nav>
+    </div>
+  </header>
+
+  <main>
+    <div id="loading" class="loading-state">
+      <div class="spinner"></div>
+      <p>Loading employee data…</p>
+    </div>
+
+    <div id="error" class="error-state hidden">
+      <p id="error-msg"></p>
+      <button onclick="loadData()">Retry</button>
+    </div>
+
+    <!-- DIRECTORY TAB -->
+    <section id="tab-directory" class="tab-panel active">
+      <div class="panel-header">
+        <h2>Employee Directory</h2>
+        <p class="panel-sub">All staff, roles, and responsibilities</p>
+      </div>
+      <div id="cards-grid" class="cards-grid"></div>
+    </section>
+
+    <!-- ORG CHART TAB -->
+    <section id="tab-orgchart" class="tab-panel hidden">
+      <div class="panel-header">
+        <h2>Org Chart</h2>
+        <p class="panel-sub">Reporting structure at Bliss VRS</p>
+      </div>
+      <div id="org-tree" class="org-tree"></div>
+    </section>
+
+    <!-- SEARCH TAB -->
+    <section id="tab-search" class="tab-panel hidden">
+      <div class="panel-header">
+        <h2>Role &amp; Task Search</h2>
+        <p class="panel-sub">Find who owns a role, duty, or keyword</p>
+      </div>
+      <div class="search-bar-wrap">
+        <input
+          id="search-input"
+          type="text"
+          placeholder="e.g. billing, dispatch, onboarding…"
+          autocomplete="off"
+        />
+      </div>
+      <div id="search-results" class="search-results"></div>
+    </section>
+  </main>
+
+  <!-- EMPLOYEE DETAIL MODAL -->
+  <div id="modal-overlay" class="modal-overlay hidden" role="dialog" aria-modal="true">
+    <div class="modal-box">
+      <button class="modal-close" id="modal-close" aria-label="Close">&times;</button>
+      <div id="modal-content"></div>
+    </div>
+  </div>
+
+  <footer>
+    <p>Internal use only &mdash; Bliss VRS &copy; <span id="yr"></span></p>
+  </footer>
+
+  <script src="app.js"></script>
+</body>
+</html>
