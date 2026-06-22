@@ -4,6 +4,9 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Bliss VRS — Employee Directory</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@400;600;700&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="style.css" />
   <script src="https://d3js.org/d3.v7.min.js"></script>
 </head>
@@ -11,7 +14,16 @@
   <header>
     <div class="header-inner">
       <div class="logo-block">
-        <img src="logo.png" alt="Bliss VRS" class="logo-img" />
+        <img
+          src="logo.png"
+          alt="Bliss VRS"
+          class="logo-img"
+          onerror="this.onerror=null;this.style.display='none';document.getElementById('logo-fallback').style.display='flex';"
+        />
+        <div id="logo-fallback" class="logo-fallback" style="display:none">
+          <span class="logo-text">BLISS VRS</span>
+          <span class="logo-sub">Vivekananda Enterprises</span>
+        </div>
       </div>
       <nav class="tab-nav">
         <button class="tab-btn active" data-tab="directory">Directory</button>
@@ -44,8 +56,13 @@
     <!-- ORG CHART TAB -->
     <section id="tab-orgchart" class="tab-panel hidden">
       <div class="panel-header">
-        <h2>Org Chart</h2>
-        <p class="panel-sub">Reporting structure at Bliss VRS</p>
+        <div class="panel-header-row">
+          <div>
+            <h2>Org Chart</h2>
+            <p class="panel-sub">Reporting structure at Bliss VRS</p>
+          </div>
+          <button class="print-btn" onclick="printReport()">Print Report</button>
+        </div>
       </div>
       <div id="org-tree" class="org-tree"></div>
     </section>
