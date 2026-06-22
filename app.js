@@ -1,46 +1,78 @@
-// ── Config ──────────────────────────────────────────────────────────────────
-const SHEET_ID = '1BlJeuTjcWaORjc323ggMacMC_zRfv24xJ8FcgnyQilw';
-// Public CSV export URL — no API key needed when the sheet is publicly readable
+// ── Config ───────────────────────────────────────────────────────────────────
+const SHEET_ID  = '1BlJeuTjcWaORjc323ggMacMC_zRfv24xJ8FcgnyQilw';
 const SHEET_URL = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:csv`;
 
-// ── State ────────────────────────────────────────────────────────────────────
+// ── Role → Color Map ─────────────────────────────────────────────────────────
+const ROLE_COLORS = {
+  // Dispatch family (blue)
+  'dispatch head':     { bg: '#1565C0', fg: '#FFFFFF' },
+  'dispatch':          { bg: '#90CAF9', fg: '#0D47A1' },
+  // Billing family (amber/orange)
+  'billing head':      { bg: '#BF360C', fg: '#FFFFFF' },
+  'billing':           { bg: '#FFE0B2', fg: '#BF360C' },
+  // Inventory / Purchase family (green)
+  'inventory head':    { bg: '#1B5E20', fg: '#FFFFFF' },
+  'inventory':         { bg: '#C8E6C9', fg: '#1B5E20' },
+  'purchase':          { bg: '#388E3C', fg: '#FFFFFF' },
+  // Customer Service / Office Manager family (purple)
+  'customer service':  { bg: '#4A148C', fg: '#FFFFFF' },
+  'office manager':    { bg: '#CE93D8', fg: '#4A148C' },
+  'office manger':     { bg: '#CE93D8', fg: '#4A148C' }, // typo variant in data
+  // MIS / Packing / Delivery family (slate)
+  'mis':               { bg: '#37474F', fg: '#FFFFFF' },
+  'packing':           { bg: '#78909C', fg: '#FFFFFF' },
+  'delivery':          { bg: '#CFD8DC', fg: '#37474F' },
+  // Leadership tier (gold)
+  'founder':           { bg: '#F9A825', fg: '#212121' },
+  'sales & marketing': { bg: '#FDD835', fg: '#212121' },
+  // Quotation (teal)
+  'quotation handler': { bg: '#00695C', fg: '#FFFFFF' },
+};
+
+function getRoleColor(role) {
+  return ROLE_COLORS[role.trim().toLowerCase()] || { bg: '#E8EAF6', fg: '#424242' };
+}
+
+function renderRoleTags(rolesStr) {
+  if (!rolesStr) return '';
+  return rolesStr.split(',').map(r => r.trim()).filter(Boolean).map(r => {
+    const c = getRoleColor(r);
+    return `<span class="role-tag" style="background:${c.bg};color:${c.fg}">${esc(r)}</span>`;
+  }).join('');
+}
+
+// ── State ─────────────────────────────────────────────────────────────────────
 let employees = [];
 
-// ── DOM refs ─────────────────────────────────────────────────────────────────
-const loadingEl  = document.getElementById('loading');
-const errorEl    = document.getElementById('error');
-const errorMsg   = document.getElementById('error-msg');
-const tabPanels  = document.querySelectorAll('.tab-panel');
-const tabBtns    = document.querySelectorAll('.tab-btn');
-const cardsGrid  = document.getElementById('cards-grid');
-const orgTree    = document.getElementById('org-tree');
-const searchInput = document.getElementById('search-input');
+// ── DOM refs ──────────────────────────────────────────────────────────────────
+const loadingEl     = document.getElementById('loading');
+const errorEl       = document.getElementById('error');
+const errorMsg      = document.getElementById('error-msg');
+const tabPanels     = document.querySelectorAll('.tab-panel');
+const tabBtns       = document.querySelectorAll('.tab-btn');
+const cardsGrid     = document.getElementById('cards-grid');
+const orgTree       = document.getElementById('org-tree');
+const searchInput   = document.getElementById('search-input');
 const searchResults = document.getElementById('search-results');
-const modalOverlay = document.getElementById('modal-overlay');
-const modalContent = document.getElementById('modal-content');
+const modalOverlay  = document.getElementById('modal-overlay');
+const modalContent  = document.getElementById('modal-content');
 
-// ── Init ─────────────────────────────────────────────────────────────────────
+// ── Init ──────────────────────────────────────────────────────────────────────
 document.getElementById('yr').textContent = new Date().getFullYear();
 document.getElementById('modal-close').addEventListener('click', closeModal);
 modalOverlay.addEventListener('click', e => { if (e.target === modalOverlay) closeModal(); });
 document.addEventListener('keydown', e => { if (e.key === 'Escape') closeModal(); });
-
-tabBtns.forEach(btn => {
-  btn.addEventListener('click', () => switchTab(btn.dataset.tab));
-});
-
+tabBtns.forEach(btn => btn.addEventListener('click', () => switchTab(btn.dataset.tab)));
 searchInput.addEventListener('input', debounce(doSearch, 220));
-
 loadData();
 
-// ── Data Loading ─────────────────────────────────────────────────────────────
+// ── Data Loading ──────────────────────────────────────────────────────────────
 async function loadData() {
   showLoading(true);
   try {
     const res = await fetch(SHEET_URL);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const csv = await res.text();
-    employees = parseCSV(csv);
+    employees = parseCSV(await res.text());
     if (!employees.length) throw new Error('No employee data found in the sheet.');
     showLoading(false);
     renderAll();
@@ -51,18 +83,17 @@ async function loadData() {
 }
 
 // ── CSV Parser ────────────────────────────────────────────────────────────────
-
-// Parse the full CSV text into an array of rows (each row = array of strings).
-// Handles multi-line quoted fields correctly by scanning character-by-character.
+// Full-document character-by-character scan — handles embedded newlines in
+// quoted fields (Job Duties column has \n inside quotes).
 function parseCSVRecords(csv) {
   const records = [];
   let row = [], cur = '', inQuote = false;
   for (let i = 0; i < csv.length; i++) {
     const ch = csv[i];
     if (inQuote) {
-      if (ch === '"' && csv[i + 1] === '"') { cur += '"'; i++; }       // escaped ""
-      else if (ch === '"')                   { inQuote = false; }       // closing quote
-      else                                   { cur += ch; }             // content (incl. \n)
+      if (ch === '"' && csv[i + 1] === '"') { cur += '"'; i++; }
+      else if (ch === '"')                   { inQuote = false; }
+      else                                   { cur += ch; }
     } else {
       if      (ch === '"')  { inQuote = true; }
       else if (ch === ',')  { row.push(cur); cur = ''; }
@@ -79,19 +110,18 @@ function parseCSV(csv) {
   const records = parseCSVRecords(csv.trim());
   if (records.length < 2) return [];
 
-  // Find the real header row — first row that contains "Employee Name" in any column
+  // Sheet has a title row above the real headers — find the real header row
+  // by locating whichever row contains "Employee Name" in any cell.
   let headerIdx = -1;
   for (let i = 0; i < records.length; i++) {
     if (records[i].some(c => c.trim().toLowerCase() === 'employee name')) {
-      headerIdx = i;
-      break;
+      headerIdx = i; break;
     }
   }
   if (headerIdx === -1) return [];
 
-  // Map column indices by fuzzy header matching
   const hdrs = records[headerIdx].map(h => h.trim().toLowerCase());
-  const col = keyword => hdrs.findIndex(h => h.includes(keyword));
+  const col  = kw => hdrs.findIndex(h => h.includes(kw));
 
   const colName    = col('employee name');
   const colRoles   = col('major role');
@@ -99,20 +129,14 @@ function parseCSV(csv) {
   const colReports = col('reports to');
   if (colName === -1) return [];
 
-  const results = [];
-  for (let i = headerIdx + 1; i < records.length; i++) {
-    const vals = records[i];
-    const name = (vals[colName] || '').trim();
-    if (!name) continue; // skip empty rows
-
-    results.push({
-      name,
-      roles:     colRoles   >= 0 ? (vals[colRoles]   || '').trim() : '',
-      duties:    colDuties  >= 0 ? (vals[colDuties]  || '').trim() : '',
-      reportsTo: colReports >= 0 ? (vals[colReports] || '').trim() : '',
-    });
-  }
-  return results;
+  return records.slice(headerIdx + 1)
+    .filter(r => (r[colName] || '').trim())
+    .map(r => ({
+      name:      (r[colName]    || '').trim(),
+      roles:     colRoles   >= 0 ? (r[colRoles]   || '').trim() : '',
+      duties:    colDuties  >= 0 ? (r[colDuties]  || '').trim() : '',
+      reportsTo: colReports >= 0 ? (r[colReports] || '').trim() : '',
+    }));
 }
 
 // ── Render All ────────────────────────────────────────────────────────────────
@@ -128,9 +152,10 @@ function renderDirectory() {
   employees.forEach(emp => {
     const card = document.createElement('div');
     card.className = 'emp-card';
+    const tagsHtml = renderRoleTags(emp.roles);
     card.innerHTML = `
       <div class="emp-card-name">${esc(emp.name)}</div>
-      <div class="emp-card-roles">${esc(emp.roles) || '<span style="color:#9e9e9e;font-weight:400;text-transform:none">No role listed</span>'}</div>
+      ${tagsHtml ? `<div class="emp-card-tags">${tagsHtml}</div>` : ''}
       ${emp.reportsTo ? `<div class="emp-card-reports">Reports to: <strong>${esc(emp.reportsTo)}</strong></div>` : ''}
     `;
     card.addEventListener('click', () => openModal(emp));
@@ -138,152 +163,169 @@ function renderDirectory() {
   });
 }
 
-
-// ── Org Chart ─────────────────────────────────────────────────────────────────
+// ── Org Chart (D3) ────────────────────────────────────────────────────────────
 function renderOrgChart() {
   orgTree.innerHTML = '';
 
-  // Build adjacency: reportsTo → [children]
-  const childrenOf = {};
-  const nameSet = new Set(employees.map(e => e.name.toLowerCase()));
+  // Build lookup and find root (no reportsTo, or manager not in the list)
+  const nameLC = new Map(employees.map(e => [e.name.toLowerCase(), e]));
+  const rootEmp = employees.find(e => !e.reportsTo || !nameLC.has(e.reportsTo.toLowerCase()))
+    || employees[0];
 
-  employees.forEach(emp => {
-    const boss = emp.reportsTo.trim();
-    if (!childrenOf[boss]) childrenOf[boss] = [];
-    childrenOf[boss].push(emp);
+  // Recursive tree builder for d3.hierarchy
+  function buildNode(emp) {
+    const kids = employees.filter(e =>
+      e.reportsTo && e.reportsTo.toLowerCase() === emp.name.toLowerCase()
+    );
+    const n = { emp };
+    if (kids.length) n.children = kids.map(buildNode);
+    return n;
+  }
+
+  const NW = 172, NH = 64, HGAP = 32, VGAP = 92;
+
+  const hier = d3.hierarchy(buildNode(rootEmp));
+  d3.tree()
+    .nodeSize([NW + HGAP, NH + VGAP])
+    .separation((a, b) => a.parent === b.parent ? 1 : 1.45)
+    (hier);
+
+  // Compute bounding box of all nodes
+  let x0 = Infinity, x1 = -Infinity, y1 = 0;
+  hier.each(d => {
+    x0 = Math.min(x0, d.x - NW / 2);
+    x1 = Math.max(x1, d.x + NW / 2);
+    y1 = Math.max(y1, d.y + NH);
   });
+  const PAD  = 36;
+  const svgW = (x1 - x0) + PAD * 2;
+  const svgH = y1 + PAD * 2;
 
-  // Find roots: employees who report to nobody OR report to a name not in the list
-  const roots = employees.filter(emp => {
-    const boss = emp.reportsTo.trim().toLowerCase();
-    return !boss || !nameSet.has(boss);
-  });
+  // Scrollable container
+  const wrap = document.createElement('div');
+  wrap.className = 'org-svg-wrap';
+  orgTree.appendChild(wrap);
 
-  // If no clear root found, just use first employee
-  const treeRoots = roots.length ? roots : [employees[0]];
+  const svg = d3.select(wrap)
+    .append('svg')
+    .attr('width',  svgW)
+    .attr('height', svgH)
+    .style('display', 'block');
 
-  const treeEl = buildOrgSubtree(treeRoots, childrenOf, 0);
-  orgTree.appendChild(treeEl);
-}
+  // Translate so leftmost node has PAD margin
+  const g = svg.append('g')
+    .attr('transform', `translate(${-x0 + PAD},${PAD})`);
 
-function buildOrgSubtree(nodes, childrenOf, depth) {
-  const row = document.createElement('div');
-  row.className = 'org-level';
-  row.style.gap = depth === 0 ? '2rem' : '1rem';
+  // ── Links (smooth bezier from parent-bottom to child-top) ──
+  g.selectAll('.org-link')
+    .data(hier.links())
+    .join('path')
+    .attr('class', 'org-link')
+    .attr('d', lk => {
+      const sx = lk.source.x, sy = lk.source.y + NH;
+      const tx = lk.target.x, ty = lk.target.y;
+      const my = (sy + ty) / 2;
+      return `M${sx},${sy} C${sx},${my} ${tx},${my} ${tx},${ty}`;
+    });
 
-  nodes.forEach(emp => {
-    const branch = document.createElement('div');
-    branch.className = 'org-branch';
+  // ── Node groups ──
+  const nodeG = g.selectAll('.org-node-g')
+    .data(hier.descendants())
+    .join('g')
+    .attr('class', d =>
+      `org-node-g ${d.depth === 0 ? 'is-root' : d.depth === 1 ? 'is-l1' : 'is-leaf'}`
+    )
+    .attr('transform', d => `translate(${d.x - NW / 2},${d.y})`);
 
-    const node = document.createElement('div');
-    node.className = `org-node${depth === 0 ? ' root' : depth === 1 ? ' level-1' : ''}`;
-    node.innerHTML = `
-      <div class="org-node-name">${esc(emp.name)}</div>
-      <div class="org-node-role">${esc(firstRole(emp.roles))}</div>
+  nodeG.append('rect')
+    .attr('class', 'org-rect')
+    .attr('width', NW)
+    .attr('height', NH)
+    .attr('rx', 8);
+
+  nodeG.append('text')
+    .attr('class', 'org-label-name')
+    .attr('x', NW / 2)
+    .attr('y', NH / 2 - 9)
+    .attr('text-anchor', 'middle')
+    .attr('dominant-baseline', 'middle')
+    .text(d => d.data.emp.name);
+
+  nodeG.append('text')
+    .attr('class', 'org-label-role')
+    .attr('x', NW / 2)
+    .attr('y', NH / 2 + 12)
+    .attr('text-anchor', 'middle')
+    .attr('dominant-baseline', 'middle')
+    .text(d => clip(firstRole(d.data.emp.roles), 26));
+
+  // ── Info panel (positioned within the scrollable wrap) ──
+  const panel = document.createElement('div');
+  panel.className = 'org-panel hidden';
+  wrap.appendChild(panel);
+
+  function showPanel(emp, event) {
+    const dutyItems = emp.duties
+      ? emp.duties.split('\n').map(d => d.replace(/^[•\-\*]\s*/, '').trim()).filter(Boolean)
+      : [];
+
+    panel.innerHTML = `
+      <button class="org-panel-close" aria-label="Close">&times;</button>
+      <div class="org-panel-name">${esc(emp.name)}</div>
+      <div class="org-panel-reports">${
+        emp.reportsTo
+          ? `Reports to <strong>${esc(emp.reportsTo)}</strong>`
+          : '<span class="org-panel-apex">Top of org</span>'
+      }</div>
+      <div class="org-panel-section">
+        <div class="org-panel-section-title">Roles</div>
+        <div class="org-panel-tags">${renderRoleTags(emp.roles) || '<em>None</em>'}</div>
+      </div>
+      <div class="org-panel-section">
+        <div class="org-panel-section-title">Job Duties</div>
+        <ul class="org-panel-duties">
+          ${dutyItems.length
+            ? dutyItems.map(d => `<li>${esc(d)}</li>`).join('')
+            : '<li><em>Not listed</em></li>'}
+        </ul>
+      </div>
     `;
-    node.addEventListener('click', () => openModal(emp));
-    branch.appendChild(node);
+    panel.classList.remove('hidden');
 
-    const children = childrenOf[emp.name] || [];
-    if (children.length) {
-      const connDown = document.createElement('div');
-      connDown.className = 'org-connector-down';
-      branch.appendChild(connDown);
+    panel.querySelector('.org-panel-close').addEventListener('click', e => {
+      e.stopPropagation();
+      hidePanel();
+    });
 
-      const childrenRow = buildOrgSubtree(children, childrenOf, depth + 1);
-      childrenRow.style.borderTop = '2px solid #E0E0E0';
-      childrenRow.style.paddingTop = '0';
+    // Position relative to click point in scroll-content coordinates
+    const wRect  = wrap.getBoundingClientRect();
+    const PW     = 290;
+    let   left   = event.clientX - wRect.left + wrap.scrollLeft + 16;
+    let   top    = event.clientY - wRect.top  + wrap.scrollTop  - 16;
 
-      // Horizontal line spanning children
-      const wrap = document.createElement('div');
-      wrap.style.display = 'flex';
-      wrap.style.flexDirection = 'column';
-      wrap.style.alignItems = 'center';
+    // Flip left if panel would overflow the right edge
+    if (left + PW > wrap.scrollWidth - 8)
+      left = event.clientX - wRect.left + wrap.scrollLeft - PW - 16;
 
-      // Build connector structure
-      const childrenContainer = document.createElement('div');
-      childrenContainer.style.display = 'flex';
-      childrenContainer.style.gap = '1rem';
-      childrenContainer.style.position = 'relative';
+    panel.style.left = Math.max(4, left) + 'px';
+    panel.style.top  = Math.max(4, top)  + 'px';
+  }
 
-      children.forEach(child => {
-        const subBranch = document.createElement('div');
-        subBranch.style.display = 'flex';
-        subBranch.style.flexDirection = 'column';
-        subBranch.style.alignItems = 'center';
+  function hidePanel() {
+    panel.classList.add('hidden');
+    nodeG.classed('org-selected', false);
+  }
 
-        const subDown = document.createElement('div');
-        subDown.className = 'org-connector-down';
-
-        const subNode = document.createElement('div');
-        const childDepth = depth + 1;
-        subNode.className = `org-node${childDepth === 1 ? ' level-1' : ''}`;
-        subNode.innerHTML = `
-          <div class="org-node-name">${esc(child.name)}</div>
-          <div class="org-node-role">${esc(firstRole(child.roles))}</div>
-        `;
-        subNode.addEventListener('click', () => openModal(child));
-
-        subBranch.appendChild(subDown);
-        subBranch.appendChild(subNode);
-
-        // Recurse for grandchildren
-        const grandchildren = childrenOf[child.name] || [];
-        if (grandchildren.length) {
-          const gcDown = document.createElement('div');
-          gcDown.className = 'org-connector-down';
-          subBranch.appendChild(gcDown);
-          const gcRow = buildFlatChildren(grandchildren, childrenOf, depth + 2);
-          subBranch.appendChild(gcRow);
-        }
-
-        childrenContainer.appendChild(subBranch);
-      });
-
-      branch.appendChild(childrenContainer);
-    }
-
-    row.appendChild(branch);
+  // Node click: select + show panel
+  nodeG.on('click', (event, d) => {
+    event.stopPropagation();
+    nodeG.classed('org-selected', false);
+    d3.select(event.currentTarget).classed('org-selected', true);
+    showPanel(d.data.emp, event);
   });
 
-  return row;
-}
-
-function buildFlatChildren(nodes, childrenOf, depth) {
-  const row = document.createElement('div');
-  row.style.display = 'flex';
-  row.style.gap = '0.75rem';
-  row.style.flexWrap = 'wrap';
-  row.style.justifyContent = 'center';
-
-  nodes.forEach(emp => {
-    const node = document.createElement('div');
-    node.className = 'org-node';
-    node.innerHTML = `
-      <div class="org-node-name">${esc(emp.name)}</div>
-      <div class="org-node-role">${esc(firstRole(emp.roles))}</div>
-    `;
-    node.addEventListener('click', () => openModal(emp));
-    row.appendChild(node);
-
-    const children = childrenOf[emp.name] || [];
-    if (children.length) {
-      const wrap = document.createElement('div');
-      wrap.style.display = 'flex';
-      wrap.style.flexDirection = 'column';
-      wrap.style.alignItems = 'center';
-      const subRow = buildFlatChildren(children, childrenOf, depth + 1);
-      wrap.appendChild(node.cloneNode(true));
-      row.appendChild(subRow);
-    }
-  });
-
-  return row;
-}
-
-function firstRole(roles) {
-  if (!roles) return '';
-  return roles.split(/[,;\/]+/)[0].trim();
+  // SVG background click: dismiss
+  svg.on('click', hidePanel);
 }
 
 // ── Search ────────────────────────────────────────────────────────────────────
@@ -295,27 +337,27 @@ function doSearch() {
   const q = searchInput.value.trim().toLowerCase();
   if (!q) { renderSearchPlaceholder(); return; }
 
-  const hits = [];
-  employees.forEach(emp => {
-    const searchable = [emp.name, emp.roles, emp.duties].join(' ').toLowerCase();
-    if (searchable.includes(q)) {
-      // Find which field matched and extract snippet
-      const matchField = getMatchField(emp, q);
-      hits.push({ emp, matchField });
-    }
-  });
+  const hits = employees.filter(emp =>
+    [emp.name, emp.roles, emp.duties].join(' ').toLowerCase().includes(q)
+  );
 
   if (!hits.length) {
     searchResults.innerHTML = `<p class="search-placeholder">No results for "<strong>${esc(q)}</strong>".</p>`;
     return;
   }
 
-  searchResults.innerHTML = hits.map(({ emp, matchField }) => `
-    <div class="search-result-card" data-name="${esc(emp.name)}">
-      <div class="sr-name">${highlight(emp.name, q)}</div>
-      <div class="sr-match">${esc(emp.roles ? emp.roles : '')}${matchField ? ` — ${matchField}` : ''}</div>
-    </div>
-  `).join('');
+  searchResults.innerHTML = hits.map(emp => {
+    const dutySnippet = emp.duties.toLowerCase().includes(q)
+      ? `<div class="sr-match">Duty: ${highlight(snippetAround(emp.duties, q, 70), q)}</div>`
+      : '';
+    return `
+      <div class="search-result-card" data-name="${esc(emp.name)}">
+        <div class="sr-name">${highlight(emp.name, q)}</div>
+        <div class="sr-roles">${renderRoleTags(emp.roles)}</div>
+        ${dutySnippet}
+      </div>
+    `;
+  }).join('');
 
   searchResults.querySelectorAll('.search-result-card').forEach(card => {
     card.addEventListener('click', () => {
@@ -325,32 +367,24 @@ function doSearch() {
   });
 }
 
-function getMatchField(emp, q) {
-  if (emp.duties.toLowerCase().includes(q)) {
-    return 'Duty: ' + highlight(snippetAround(emp.duties, q, 60), q);
-  }
-  return '';
-}
-
 function snippetAround(text, q, maxLen) {
   const idx = text.toLowerCase().indexOf(q);
   if (idx === -1) return text.slice(0, maxLen);
   const start = Math.max(0, idx - 20);
-  const end = Math.min(text.length, idx + q.length + 40);
+  const end   = Math.min(text.length, idx + q.length + 40);
   return (start > 0 ? '…' : '') + text.slice(start, end) + (end < text.length ? '…' : '');
 }
 
 function highlight(text, q) {
   if (!q) return esc(text);
-  const regex = new RegExp(`(${escRegex(q)})`, 'gi');
-  return esc(text).replace(regex, '<mark>$1</mark>');
+  return esc(text).replace(new RegExp(`(${escRegex(q)})`, 'gi'), '<mark>$1</mark>');
 }
 
 function escRegex(s) {
   return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
-// ── Modal / Reporting Chain ───────────────────────────────────────────────────
+// ── Modal (Employee Detail) ───────────────────────────────────────────────────
 function openModal(emp) {
   const chain = buildChain(emp);
   const dutyItems = emp.duties
@@ -362,7 +396,7 @@ function openModal(emp) {
 
   modalContent.innerHTML = `
     <div class="modal-name">${esc(emp.name)}</div>
-    <div class="modal-roles">${esc(emp.roles) || 'No role listed'}</div>
+    <div class="modal-roles">${renderRoleTags(emp.roles) || '<span style="color:#9e9e9e">No roles listed</span>'}</div>
     <div class="modal-section">
       <div class="modal-section-title">Job Duties</div>
       <div class="modal-section-body">${duties}</div>
@@ -390,32 +424,26 @@ function closeModal() {
 }
 
 function buildChain(emp) {
-  // Walk up the reporting tree
-  const chain = [];
-  const visited = new Set();
-  let current = emp;
-  while (current) {
-    if (visited.has(current.name)) break; // cycle guard
-    visited.add(current.name);
-    chain.unshift(current);
-    if (!current.reportsTo) break;
-    current = employees.find(e => e.name.toLowerCase() === current.reportsTo.trim().toLowerCase());
+  const chain = [], visited = new Set();
+  let cur = emp;
+  while (cur) {
+    if (visited.has(cur.name)) break;
+    visited.add(cur.name);
+    chain.unshift(cur);
+    if (!cur.reportsTo) break;
+    cur = employees.find(e => e.name.toLowerCase() === cur.reportsTo.trim().toLowerCase());
   }
   return chain;
 }
 
 function renderChain(chain, selfName) {
-  return chain.map((e, i) => {
-    const isSelf = e.name === selfName;
-    const arrow = i > 0 ? `<span class="chain-arrow">&#x25B2;</span>` : '';
-    return `
-      <div class="chain-item${isSelf ? ' chain-self' : ''}">
-        ${arrow}
-        <span class="chain-name">${esc(e.name)}</span>
-        <span class="chain-role">${esc(firstRole(e.roles))}</span>
-      </div>
-    `;
-  }).join('');
+  return chain.map((e, i) => `
+    <div class="chain-item${e.name === selfName ? ' chain-self' : ''}">
+      ${i > 0 ? '<span class="chain-arrow">&#x25B2;</span>' : ''}
+      <span class="chain-name">${esc(e.name)}</span>
+      <span class="chain-role">${esc(firstRole(e.roles))}</span>
+    </div>
+  `).join('');
 }
 
 // ── Tabs ──────────────────────────────────────────────────────────────────────
@@ -427,7 +455,17 @@ function switchTab(tab) {
   });
 }
 
-// ── UI Helpers ────────────────────────────────────────────────────────────────
+// ── Helpers ───────────────────────────────────────────────────────────────────
+function firstRole(roles) {
+  if (!roles) return '';
+  return roles.split(/[,;\/]+/)[0].trim();
+}
+
+function clip(str, max) {
+  if (!str) return '';
+  return str.length > max ? str.slice(0, max - 1) + '…' : str;
+}
+
 function showLoading(on) {
   loadingEl.classList.toggle('hidden', !on);
   tabPanels.forEach(p => p.classList.toggle('hidden', on || !p.classList.contains('active')));
@@ -441,7 +479,7 @@ function showError(msg) {
 
 function esc(str) {
   if (!str) return '';
-  return str.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 
 function debounce(fn, ms) {
