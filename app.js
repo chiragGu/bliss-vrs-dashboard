@@ -51,48 +51,65 @@ async function loadData() {
 }
 
 // ── CSV Parser ────────────────────────────────────────────────────────────────
-function parseCSV(csv) {
-  const lines = csv.trim().split('\n');
-  if (lines.length < 2) return [];
 
-  // Parse a CSV line respecting quoted fields
-  function parseLine(line) {
-    const fields = [];
-    let cur = '', inQuote = false;
-    for (let i = 0; i < line.length; i++) {
-      const ch = line[i];
-      if (ch === '"') {
-        if (inQuote && line[i+1] === '"') { cur += '"'; i++; }
-        else inQuote = !inQuote;
-      } else if (ch === ',' && !inQuote) {
-        fields.push(cur.trim()); cur = '';
-      } else {
-        cur += ch;
-      }
+// Parse the full CSV text into an array of rows (each row = array of strings).
+// Handles multi-line quoted fields correctly by scanning character-by-character.
+function parseCSVRecords(csv) {
+  const records = [];
+  let row = [], cur = '', inQuote = false;
+  for (let i = 0; i < csv.length; i++) {
+    const ch = csv[i];
+    if (inQuote) {
+      if (ch === '"' && csv[i + 1] === '"') { cur += '"'; i++; }       // escaped ""
+      else if (ch === '"')                   { inQuote = false; }       // closing quote
+      else                                   { cur += ch; }             // content (incl. \n)
+    } else {
+      if      (ch === '"')  { inQuote = true; }
+      else if (ch === ',')  { row.push(cur); cur = ''; }
+      else if (ch === '\n') { row.push(cur); cur = ''; records.push(row); row = []; }
+      else if (ch === '\r') { /* skip */ }
+      else                  { cur += ch; }
     }
-    fields.push(cur.trim());
-    return fields;
   }
+  if (cur || row.length) { row.push(cur); records.push(row); }
+  return records;
+}
 
-  const headers = parseLine(lines[0]).map(h => h.toLowerCase().replace(/\s+/g, '_'));
-  // Expected: employee_name, major_roles, job_duties, reports_to, available_tags, tag_selection
+function parseCSV(csv) {
+  const records = parseCSVRecords(csv.trim());
+  if (records.length < 2) return [];
+
+  // Find the real header row — first row that contains "Employee Name" in any column
+  let headerIdx = -1;
+  for (let i = 0; i < records.length; i++) {
+    if (records[i].some(c => c.trim().toLowerCase() === 'employee name')) {
+      headerIdx = i;
+      break;
+    }
+  }
+  if (headerIdx === -1) return [];
+
+  // Map column indices by fuzzy header matching
+  const hdrs = records[headerIdx].map(h => h.trim().toLowerCase());
+  const col = keyword => hdrs.findIndex(h => h.includes(keyword));
+
+  const colName    = col('employee name');
+  const colRoles   = col('major role');
+  const colDuties  = col('job dut');
+  const colReports = col('reports to');
+  if (colName === -1) return [];
 
   const results = [];
-  for (let i = 1; i < lines.length; i++) {
-    if (!lines[i].trim()) continue;
-    const vals = parseLine(lines[i]);
-    const row = {};
-    headers.forEach((h, idx) => { row[h] = vals[idx] || ''; });
-
-    const name = row['employee_name'] || row[headers[0]] || '';
-    if (!name) continue;
+  for (let i = headerIdx + 1; i < records.length; i++) {
+    const vals = records[i];
+    const name = (vals[colName] || '').trim();
+    if (!name) continue; // skip empty rows
 
     results.push({
-      name:      name,
-      roles:     row['major_roles']     || '',
-      duties:    row['job_duties']      || '',
-      reportsTo: row['reports_to']      || '',
-      tags:      row['tag_selection']   || row['available_tags'] || '',
+      name,
+      roles:     colRoles   >= 0 ? (vals[colRoles]   || '').trim() : '',
+      duties:    colDuties  >= 0 ? (vals[colDuties]  || '').trim() : '',
+      reportsTo: colReports >= 0 ? (vals[colReports] || '').trim() : '',
     });
   }
   return results;
@@ -115,19 +132,12 @@ function renderDirectory() {
       <div class="emp-card-name">${esc(emp.name)}</div>
       <div class="emp-card-roles">${esc(emp.roles) || '<span style="color:#9e9e9e;font-weight:400;text-transform:none">No role listed</span>'}</div>
       ${emp.reportsTo ? `<div class="emp-card-reports">Reports to: <strong>${esc(emp.reportsTo)}</strong></div>` : ''}
-      ${renderTags(emp.tags)}
     `;
     card.addEventListener('click', () => openModal(emp));
     cardsGrid.appendChild(card);
   });
 }
 
-function renderTags(tagsStr) {
-  if (!tagsStr) return '';
-  const tags = tagsStr.split(/[,;]+/).map(t => t.trim()).filter(Boolean);
-  if (!tags.length) return '';
-  return `<div class="emp-card-tags">${tags.map(t => `<span class="tag">${esc(t)}</span>`).join('')}</div>`;
-}
 
 // ── Org Chart ─────────────────────────────────────────────────────────────────
 function renderOrgChart() {
@@ -287,7 +297,7 @@ function doSearch() {
 
   const hits = [];
   employees.forEach(emp => {
-    const searchable = [emp.name, emp.roles, emp.duties, emp.tags].join(' ').toLowerCase();
+    const searchable = [emp.name, emp.roles, emp.duties].join(' ').toLowerCase();
     if (searchable.includes(q)) {
       // Find which field matched and extract snippet
       const matchField = getMatchField(emp, q);
@@ -319,9 +329,6 @@ function getMatchField(emp, q) {
   if (emp.duties.toLowerCase().includes(q)) {
     return 'Duty: ' + highlight(snippetAround(emp.duties, q, 60), q);
   }
-  if (emp.tags.toLowerCase().includes(q)) {
-    return 'Tag: ' + highlight(snippetAround(emp.tags, q, 60), q);
-  }
   return '';
 }
 
@@ -346,13 +353,12 @@ function escRegex(s) {
 // ── Modal / Reporting Chain ───────────────────────────────────────────────────
 function openModal(emp) {
   const chain = buildChain(emp);
-  const duties = emp.duties
-    ? `<ul>${emp.duties.split(/[;\n]+/).map(d => d.trim()).filter(Boolean).map(d => `<li>${esc(d)}</li>`).join('')}</ul>`
+  const dutyItems = emp.duties
+    ? emp.duties.split('\n').map(d => d.replace(/^[•\-\*]\s*/, '').trim()).filter(Boolean)
+    : [];
+  const duties = dutyItems.length
+    ? `<ul>${dutyItems.map(d => `<li>${esc(d)}</li>`).join('')}</ul>`
     : '<em>Not listed</em>';
-
-  const tagsHtml = emp.tags
-    ? emp.tags.split(/[,;]+/).map(t => t.trim()).filter(Boolean).map(t => `<span class="tag">${esc(t)}</span>`).join('')
-    : '<em>None</em>';
 
   modalContent.innerHTML = `
     <div class="modal-name">${esc(emp.name)}</div>
@@ -370,12 +376,6 @@ function openModal(emp) {
       <div class="modal-section-title">Reporting Chain</div>
       <div class="modal-section-body">
         <div class="chain-list">${renderChain(chain, emp.name)}</div>
-      </div>
-    </div>
-    <div class="modal-section">
-      <div class="modal-section-title">Tags</div>
-      <div class="modal-section-body">
-        <div class="emp-card-tags" style="margin-top:0">${tagsHtml}</div>
       </div>
     </div>
   `;
