@@ -293,7 +293,7 @@ function renderOrgChart() {
       .attr('rx', 7);
 
     // Employee name
-    const nameFill = isRoot ? '#F9A825' : isL1 ? '#FFFFFF' : '#111111';
+    const nameFill = '#111111';
     grp.append('text')
       .attr('class', 'org-label-name')
       .attr('x', OC.NW / 2)
